@@ -22,6 +22,7 @@ const toolNames = [
   ENGINE_HOST_TOOL_NAMES.browserScreenshot,
   ENGINE_HOST_TOOL_NAMES.browserAct,
   ENGINE_HOST_TOOL_NAMES.browserSetProxy,
+  ENGINE_HOST_TOOL_NAMES.sendAgentMessage,
 ] as const;
 
 const callSchema = z.object({

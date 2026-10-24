@@ -45,6 +45,7 @@ import {
   type EngineHostToolName,
 } from "../engine-host-tools.js";
 import { ApiError } from "../errors.js";
+import { createAgentMessageStore, type AgentMessageStore, type AgentPromptTarget } from "../agent-message.js";
 import { beginResourceOperation } from "../resource-lifecycle.js";
 import { readProjectSessionWorkItem, listWorkTemplates, writeConversationWorkflow, saveWorkTemplate, WorkItemConflictError } from "../work-items.js";
 import {
@@ -106,6 +107,8 @@ interface RegisterCoreRoutesOptions {
   createOpenAiRealtimeVoiceSession: (env: EnvService, input: unknown) => Promise<unknown>;
   resolveEngineSessionContext?: (workspaceId: string) => string | null;
   resolveEngineArtifactSessionId?: (workspace: WorkspaceInfo, sessionId: string) => Promise<string>;
+  agentMessages?: AgentMessageStore;
+  agentPromptTarget?: AgentPromptTarget;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -347,6 +350,8 @@ export function registerCoreRoutes(options: RegisterCoreRoutesOptions): void {
     createOpenAiRealtimeVoiceSession,
     resolveEngineSessionContext,
     resolveEngineArtifactSessionId,
+    agentMessages,
+    agentPromptTarget,
   } = options;
   const googleWorkspaceConnectFlows = createGoogleWorkspaceConnectFlowManager(config);
   const envPendingChangesByRuntime = new Map<string, boolean>();
@@ -979,6 +984,23 @@ export function registerCoreRoutes(options: RegisterCoreRoutesOptions): void {
         });
       }
       return result;
+    },
+    [ENGINE_HOST_TOOL_NAMES.sendAgentMessage]: async (_ctx, args, context) => {
+      if (!agentMessages || !agentPromptTarget) {
+        throw new ApiError(503, "agent_message_feature_unavailable", "Agent message feature is not configured on this server");
+      }
+      const workspace = await resolveEngineToolWorkspace(context);
+      const sessionId = typeof context.sessionId === "string" ? context.sessionId.trim() : "";
+      if (!sessionId) throw new ApiError(400, "agent_message_source_missing", "This tool requires the current conversation identity");
+      const source = agentMessages.findAgentBySession(workspace.id, sessionId);
+      if (!source) throw new ApiError(403, "agent_message_source_not_registered", "The current session is not a registered agent; register it first via POST /workspace/:id/agents");
+      const targetAgent = typeof args.targetAgent === "string" ? args.targetAgent.trim() : "";
+      if (!targetAgent) throw new ApiError(400, "invalid_payload", "targetAgent is required");
+      const body = typeof args.body === "string" ? args.body : "";
+      const traceId = typeof args.traceId === "string" ? args.traceId.trim() : undefined;
+      const result = await agentMessages.deliver(workspace, { fromAgent: source.agentKey, toAgent: targetAgent, body, traceId }, agentPromptTarget);
+      if (!result.delivered) throw new ApiError(409, `agent_message_${result.reason}`, `Inter-agent message not delivered: ${result.reason}`);
+      return { ok: true, traceId: result.traceId, delivered: true, targetSessionId: result.targetSessionId, depth: result.depth, budgetUsed: result.budgetUsed, truncated: result.truncated };
     },
   } satisfies Record<EngineHostToolName, EngineHostToolHandler>;
 

@@ -22,6 +22,7 @@ export const ENGINE_HOST_TOOL_NAMES = {
   browserScreenshot: "ipollowork_browser_screenshot",
   browserAct: "ipollowork_browser_act",
   browserSetProxy: "ipollowork_browser_set_proxy",
+  sendAgentMessage: "ipollowork_send_agent_message",
 } as const;
 
 export type EngineHostToolName = (typeof ENGINE_HOST_TOOL_NAMES)[keyof typeof ENGINE_HOST_TOOL_NAMES];
@@ -520,6 +521,15 @@ ${ENGINE_VIDEO_GENERATION_INSTRUCTION}`,
     parameters: objectParameters({
       proxy: { type: "string", description: "Proxy URL, env:NAME, or empty string to clear." },
     }, ["proxy"]),
+  },
+  {
+    name: ENGINE_HOST_TOOL_NAMES.sendAgentMessage,
+    description: "Send a short context note to another registered iPolloWork agent session in this workspace (restricted cross-session delivery, Phase 2). The target treats it as reference data, not instructions. Messages are wrapped in <inter-agent-message>, depth-bounded (max 3 turns per pair), budget-capped (60 per workspace), same-engine restricted, and truncated at ~500 tokens. Use for guarded hand-offs within a coordinator-led exchange; the calling session must first be registered as an agent.",
+    parameters: objectParameters({
+      targetAgent: { type: "string", description: "Registered target agent key in this workspace." },
+      body: { type: "string", description: "Short note to share (bounded; truncated if too long)." },
+      traceId: { type: "string", description: "Optional trace id to continue an existing exchange." },
+    }, ["targetAgent", "body"]),
   },
 ] as const;
 

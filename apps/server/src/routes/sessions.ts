@@ -32,6 +32,7 @@ import { addRoute, type RequestContext, type Route } from "./registry.js";
 import { assertResourceWritable, listResourceLifecycles, readResourceLifecycle, rememberResourceSummaries } from "../resource-lifecycle.js";
 import { enterpriseSnapshotImportSchema } from "@ipollowork/types/enterprise";
 import { importEnterpriseSnapshot, readEnterpriseSnapshot, summarizeEnterpriseSession, withEnterpriseSnapshotMetadata } from "../enterprise-session-snapshots.js";
+import { createAgentMessageStore, type AgentMessageStore, type AgentPromptTarget } from "../agent-message.js";
 
 type JsonResponse = (data: unknown, status?: number) => Response;
 type ReadJsonBody = (request: Request) => Promise<Record<string, unknown>>;
@@ -61,6 +62,8 @@ interface RegisterSessionRoutesOptions {
   codexHarness: CodexHarnessRuntimePool;
   sessionRuntime: WorkspaceSessionRuntime;
   monitorSessionExecution?: (workspace: WorkspaceInfo, sessionId: string, turnId?: string) => void;
+  agentMessages?: AgentMessageStore;
+  agentPromptTarget?: AgentPromptTarget;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -130,6 +133,9 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
     deepseekHarness,
     codexHarness,
     sessionRuntime,
+    monitorSessionExecution,
+    agentMessages,
+    agentPromptTarget,
   } = options;
 
   function remapSessionReadError(error: unknown): never {
@@ -509,5 +515,56 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
 
     await sessionRuntime.delete(workspace, sessionId, parseOptionalBoolean(ctx.url.searchParams.get("deleteFiles"), "deleteFiles") ?? false);
     return jsonResponse({ ok: true });
+  });
+
+  // ── Agent-message routes (restricted Phase 2) ──────────────────────────────
+
+  addRoute(routes, "POST", "/workspace/:id/agents", "client", async (ctx) => {
+    ensureWritable(config);
+    requireClientScope(ctx, "collaborator");
+    const workspace = await resolveWorkspace(config, ctx.params.id);
+    const body = await readJsonBody(ctx.request);
+    const agentKey = optionalString(body, "agentKey", 80);
+    const sessionId = optionalString(body, "sessionId", 200);
+    if (!agentKey || !sessionId) {
+      throw new ApiError(400, "invalid_payload", "agentKey and sessionId are required");
+    }
+    const role = body.role === "coordinator" ? "coordinator" : "worker";
+    const engineId = optionalString(body, "engineId", 80) ?? (workspace.engineId?.trim() || DEFAULT_ENGINE_ID);
+    if (!agentMessages) {
+      throw new ApiError(503, "agent_message_feature_unavailable", "Agent message feature is not configured on this server");
+    }
+    agentMessages.registerAgent(workspace.id, { agentKey, sessionId, engineId, role });
+    return jsonResponse({ ok: true, agents: agentMessages.listAgents(workspace.id) });
+  });
+
+  addRoute(routes, "POST", "/workspace/:id/agent-message", "client", async (ctx) => {
+    ensureWritable(config);
+    requireClientScope(ctx, "collaborator");
+    const workspace = await resolveWorkspace(config, ctx.params.id);
+    const body = await readJsonBody(ctx.request);
+    const fromAgent = optionalString(body, "fromAgent", 80);
+    const toAgent = optionalString(body, "toAgent", 80);
+    const messageBody = optionalString(body, "body", 100_000) ?? "";
+    const traceId = optionalString(body, "traceId", 120);
+    if (!fromAgent || !toAgent) {
+      throw new ApiError(400, "invalid_payload", "fromAgent and toAgent are required");
+    }
+    if (!agentMessages || !agentPromptTarget) {
+      throw new ApiError(503, "agent_message_feature_unavailable", "Agent message feature is not configured on this server");
+    }
+    const result = await agentMessages.deliver(workspace, { fromAgent, toAgent, body: messageBody, traceId }, agentPromptTarget);
+    if (!result.delivered) {
+      throw new ApiError(409, `agent_message_${result.reason}`, `Inter-agent message not delivered: ${result.reason}`);
+    }
+    return jsonResponse(result);
+  });
+
+  addRoute(routes, "GET", "/workspace/:id/agent-message-trace", "client", async (ctx) => {
+    const workspace = await resolveWorkspace(config, ctx.params.id);
+    if (!agentMessages) {
+      throw new ApiError(503, "agent_message_feature_unavailable", "Agent message feature is not configured on this server");
+    }
+    return jsonResponse({ items: agentMessages.trace(workspace.id) });
   });
 }

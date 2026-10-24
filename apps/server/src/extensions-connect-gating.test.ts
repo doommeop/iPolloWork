@@ -572,6 +572,7 @@ describe("extension and engine host tool gating", () => {
       "ipollowork_browser_screenshot",
       "ipollowork_browser_act",
       "ipollowork_browser_set_proxy",
+      "ipollowork_send_agent_message",
     ]);
     const scheduleDescription = catalog.tools?.find((tool) => tool.name === "ipollowork_schedule_preview")?.description;
     expect(scheduleDescription).toContain("是否需要生成计划并加入 iPolloWork 日程？");
@@ -641,6 +642,7 @@ describe("extension and engine host tool gating", () => {
         "ipollowork_browser_screenshot",
         "ipollowork_browser_act",
         "ipollowork_browser_set_proxy",
+        "ipollowork_send_agent_message",
       ]);
       const result = await client.callTool({
         name: "ipollowork_extension_list_actions",

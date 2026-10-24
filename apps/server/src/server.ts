@@ -47,6 +47,7 @@ import { DeepSeekHarnessRuntimePool } from "./deepseek-harness-runtime.js";
 import { assertResourceWritable, beginResourceOperation } from "./resource-lifecycle.js";
 import { CodexHarnessRuntimePool } from "./codex-harness-runtime.js";
 import { WorkspaceSessionRuntime } from "./workspace-session-runtime.js";
+import { createAgentMessageStore, type AgentMessageStore, type AgentPromptTarget } from "./agent-message.js";
 import { pluginEngineAdapters, pluginEngineCompatibility } from "./plugin-engine-adapter.js";
 import type { PluginPackageManifest } from "./plugin-package-manifest.js";
 
@@ -802,6 +803,13 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       if (!sessionId) await disposeAllPluginServices(config, workspaceId);
     },
   });
+  // Agent-message store (restricted Phase 2). Persistence keeps agent
+  // registrations and traces across server restarts (best-effort).
+  const agentMessages: AgentMessageStore = createAgentMessageStore(undefined, {
+    dbPath: join(dirname(runtimeDbPathForServer(config)), "agent-message.sqlite"),
+  });
+  const agentPromptTarget: AgentPromptTarget = (workspace, sessionId, input) =>
+    sessionRuntime.prompt(workspace, sessionId, input);
   const logger = createServerLogger(config);
   const watcherHandle = startReloadWatchers({ config, reloadEvents, logger });
   const refreshWorkspaceReloadBaseline = (workspaceId: string, reasons?: ReloadReason[]) =>
@@ -869,6 +877,8 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     sessionRuntime,
     reconcileReloadWatchers,
     monitorSessionExecution,
+    agentMessages,
+    agentPromptTarget,
   );
 
   const serverOptions: {
@@ -1688,6 +1698,8 @@ function createRoutes(
   sessionRuntime: WorkspaceSessionRuntime,
   onWorkspacesChanged: () => Promise<void>,
   monitorSessionExecution: (workspace: WorkspaceInfo, sessionId: string, turnId?: string) => void,
+  agentMessages: AgentMessageStore,
+  agentPromptTarget: AgentPromptTarget,
 ): Route[] {
   const routes: Route[] = [];
   let defaultPluginPreparation: Promise<void> | null = null;
@@ -1741,6 +1753,8 @@ function createRoutes(
     createOpenAiRealtimeVoiceSession,
     resolveEngineSessionContext: (workspaceId) => sessionRuntime.sessionContextHint(workspaceId),
     resolveEngineArtifactSessionId: (workspace, sessionId) => sessionRuntime.artifactOwnerSessionId(workspace, sessionId),
+    agentMessages: agentMessages,
+    agentPromptTarget: agentPromptTarget,
   });
 
   registerWorkspaceRoutes({
@@ -1790,6 +1804,8 @@ function createRoutes(
     codexHarness,
     sessionRuntime,
     monitorSessionExecution,
+    agentMessages: agentMessages,
+    agentPromptTarget: agentPromptTarget,
   });
 
   registerDeepSeekHarnessRoutes({
